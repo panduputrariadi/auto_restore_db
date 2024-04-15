@@ -19,9 +19,12 @@ func main() {
 	InitEnv()
 	config.OpenDB()
 
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit: 100 * 1024 * 1024,
+	})
 
 	controllers.RouteCompany(app)
+	controllers.RouteHistory(app)
 
 	err := app.Listen(":3000")
 	if err != nil {

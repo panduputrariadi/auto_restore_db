@@ -1,11 +1,13 @@
 package model
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/gorm"
+)
 
 type History struct {
 	Model
-	DatabaseName string `gorm:"not null" json:"database_name"`
-	FileName string `gorm:"not null" json:"file_name"`
+	DatabaseName int `gorm:"not null" json:"database_name"`
+	File string `gorm:"not null" json:"file"`
 }
 
 func (cr *History) CreateHistory(db *gorm.DB) error {

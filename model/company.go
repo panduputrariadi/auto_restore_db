@@ -4,8 +4,8 @@ import "gorm.io/gorm"
 
 type Company struct {
 	Model
-	DatabaseName string `gorm:"not null" json:"database_name"`
-	Histories    []History `gorm:"foreignkey:DatabaseName" json:"histories"`
+	CompanyName string    `gorm:"not null" json:"company_name"`
+	Histories   []History `gorm:"foreignkey:database_name" json:"histories"`
 }
 
 func (cr *Company) CreateCompany(db *gorm.DB) error {
@@ -27,6 +27,7 @@ func (cr *Company) GetCompanyById(db *gorm.DB) (Company, error) {
 	err := db.
 		Model(Company{}).
 		Where("id = ?", cr.Model.ID).
+		Preload("Histories").
 		Take(&res).
 		Error
 
@@ -42,7 +43,9 @@ func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
 
 	err := db.
 		Model(Company{}).
+		Joins("LEFT JOIN histories ON companies.company_name = histories.database_name").
 		Preload("Histories").
+		Order("Histories.updated_at DESC").
 		Find(&res).
 		Error
 
@@ -80,4 +83,3 @@ func (cr *Company) DeleteCompany(db *gorm.DB) error {
 
 	return nil
 }
-

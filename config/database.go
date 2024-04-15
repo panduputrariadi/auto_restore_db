@@ -1,7 +1,7 @@
 package config
 
 import (
-	model "final-project/sekolah-beta/models"
+	"final-project/sekolah-beta/model"
 	"fmt"
 	"log"
 	"os"
