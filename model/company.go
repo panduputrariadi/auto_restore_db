@@ -43,9 +43,9 @@ func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
 
 	err := db.
 		Model(Company{}).
-		Joins("LEFT JOIN histories ON companies.company_name = histories.database_name").
-		Preload("Histories").
-		Order("Histories.updated_at DESC").
+		Preload("Histories", func(db *gorm.DB) *gorm.DB {
+			return db.Order("histories.updated_at DESC").Limit(1)
+		}).
 		Find(&res).
 		Error
 
