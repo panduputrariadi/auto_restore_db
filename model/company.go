@@ -39,21 +39,23 @@ func (cr *Company) GetCompanyById(db *gorm.DB) (Company, error) {
 }
 
 func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
-	res := []Company{}
+	var companies []Company
 
-	err := db.
-		Model(Company{}).
+	// Subquery untuk mendapatkan history terbaru untuk setiap company
+	subQuery := db.Model(&History{}).
+		Select("database_name, MAX(updated_at) AS latest_updated_at").
+		Group("database_name")
+
+	// Mengambil semua companies dengan history terbaru
+	if err := db.
 		Preload("Histories", func(db *gorm.DB) *gorm.DB {
-			return db.Order("histories.updated_at DESC").Limit(1)
+			return db.Joins("INNER JOIN (?) AS latest_histories ON histories.database_name = latest_histories.database_name AND histories.updated_at = latest_histories.latest_updated_at", subQuery)
 		}).
-		Find(&res).
-		Error
-
-	if err != nil {
-		return []Company{}, err
+		Find(&companies).Error; err != nil {
+		return nil, err
 	}
 
-	return res, nil
+	return companies, nil
 }
 
 func (cr *Company) UpdateCompany(db *gorm.DB) error {
@@ -82,4 +84,20 @@ func (cr *Company) DeleteCompany(db *gorm.DB) error {
 	}
 
 	return nil
+}
+func (cr *Company) DownloadCompanyHistoryFile(db *gorm.DB, companyID uint) (string, error) {
+	var history History
+	err := db.
+		Model(&History{}).
+		Select("file").
+		Joins("join companies on companies.id = histories.company_id").
+		Where("companies.id = ?", companyID).
+		First(&history).
+		Error
+
+	if err != nil {
+		return "", err
+	}
+
+	return history.File, nil
 }
