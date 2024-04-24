@@ -8,19 +8,6 @@ type Company struct {
 	Histories   []History `gorm:"foreignkey:database_name" json:"histories"`
 }
 
-func (cr *Company) CreateCompany(db *gorm.DB) error {
-	err := db.
-		Model(Company{}).
-		Create(&cr).
-		Error
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (cr *Company) GetCompanyById(db *gorm.DB) (Company, error) {
 	res := Company{}
 
@@ -41,7 +28,7 @@ func (cr *Company) GetCompanyById(db *gorm.DB) (Company, error) {
 func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
 	var companies []Company
 
-	// Subquery untuk mendapatkan history terbaru untuk setiap company
+	// query dapetin update terbaru
 	subQuery := db.Model(&History{}).
 		Select("database_name, MAX(updated_at) AS latest_updated_at").
 		Group("database_name")
@@ -58,40 +45,15 @@ func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
 	return companies, nil
 }
 
-func (cr *Company) UpdateCompany(db *gorm.DB) error {
-	err := db.
-		Model(&Company{}).
-		Where("id = ?", cr.ID).
-		Updates(&cr).
-		Error
 
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (cr *Company) DeleteCompany(db *gorm.DB) error {
-	err := db.
-		Model(&Company{}).
-		Where("id = ?", cr.ID).
-		Delete(&cr).
-		Error
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
 func (cr *Company) DownloadCompanyHistoryFile(db *gorm.DB, companyID uint) (string, error) {
 	var history History
 	err := db.
 		Model(&History{}).
 		Select("file").
-		Joins("join companies on companies.id = histories.company_id").
-		Where("companies.id = ?", companyID).
+		Where("database_name = ?", companyID).
+		Order("updated_at desc"). // Jika Anda ingin mengambil yang terbaru, urutkan berdasarkan tanggal yang terbaru
+		Limit(1).                // Ambil hanya satu record yang terbaru
 		First(&history).
 		Error
 
