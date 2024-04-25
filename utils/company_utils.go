@@ -18,9 +18,11 @@ func GetCompanyID(id uint) (model.Company, error) {
 	}
 	return company.GetCompanyById(config.Mysql.DB)
 }
-func DownloadCompanyHistoryFile(companyName string) (string, error) {
+func DownloadCompanyHistoryFile(companyID uint) (string, error) {
 	company := model.Company{
-		CompanyName: companyName,
+		Model: model.Model{
+			ID: companyID,
+		},
 	}
-	return company.DownloadCompanyHistoryFile(config.Mysql.DB, companyName)
+	return company.DownloadCompanyHistoryFile(config.Mysql.DB, companyID)
 }

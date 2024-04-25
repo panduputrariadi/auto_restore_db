@@ -46,12 +46,12 @@ func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
 }
 
 
-func (cr *Company) DownloadCompanyHistoryFile(db *gorm.DB, companyName string) (string, error) {
+func (cr *Company) DownloadCompanyHistoryFile(db *gorm.DB, companyID uint) (string, error) {
 	var history History
 	err := db.
 		Model(&History{}).
 		Select("file").
-		Where("database_name = ?", companyName).
+		Where("database_name = ?", companyID).
 		Order("updated_at desc"). // Jika Anda ingin mengambil yang terbaru, urutkan berdasarkan tanggal yang terbaru
 		Limit(1).                // Ambil hanya satu record yang terbaru
 		First(&history).
