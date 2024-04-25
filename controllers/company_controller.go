@@ -73,7 +73,7 @@ func GetCompanyById(c *fiber.Ctx) error {
 }
 
 func DownloadCompanyHistory(c *fiber.Ctx) error {
-	companyId, err := strconv.Atoi(c.Params("id"))
+	companyName, err := strconv.Atoi(c.Params("company_name"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(
 			map[string]interface{}{
@@ -82,7 +82,7 @@ func DownloadCompanyHistory(c *fiber.Ctx) error {
 		)
 	}
 
-	filePath, err := utils.DownloadCompanyHistoryFile(uint(companyId))
+	filePath, err := utils.DownloadCompanyHistoryFile(string(companyName))
 	if err != nil {
 		logrus.Error("Error retrieving latest company history file: ", err.Error())
 		return c.Status(fiber.StatusInternalServerError).JSON(

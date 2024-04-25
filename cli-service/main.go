@@ -16,6 +16,25 @@ import (
 
 func main() {
 
+	configData, err := ioutil.ReadFile("../config.json")
+	if err != nil {
+		fmt.Printf("Error reading config file: %s\n", err)
+		return
+	}
+
+	var config []map[string]string
+	err = json.Unmarshal(configData, &config)
+	if err != nil {
+		fmt.Printf("Error decoding config JSON: %s\n", err)
+		return
+	}
+
+	dbHost := config[0]["db_host"]
+	dbPort := config[0]["db_port"]
+	dbName := config[0]["database_name"]
+	dbUser := config[0]["db_username"]
+	// dbPassword := config[0]["db_password"]
+
 	// URL layanan web, ganti {id} dengan ID yang sesuai.
 	fileURL := "http://localhost:3000/company/3/download"
 
@@ -56,26 +75,6 @@ func main() {
 				fmt.Println("Unzipping completed successfully")
 			}
 
-			configData, err := ioutil.ReadFile("../config.json")
-			if err != nil {
-				fmt.Printf("Error reading config file: %s\n", err)
-				return
-			}
-
-			var config []map[string]string
-			err = json.Unmarshal(configData, &config)
-			if err != nil {
-				fmt.Printf("Error decoding config JSON: %s\n", err)
-				return
-			}
-
-			dbHost := config[0]["db_host"]
-			dbPort := config[0]["db_port"]
-			dbName := config[0]["database_name"]
-			dbUser := config[0]["db_username"]
-			// dbPassword := config[0]["db_password"]
-			
-
 			fileList, err := ioutil.ReadDir(destDir)
 			if err != nil {
 				fmt.Printf("Error reading directory: %s\n", err)
@@ -95,7 +94,6 @@ func main() {
 				return
 			}
 
-			
 			importCmd := fmt.Sprintf("mysql -u %s  -h %s -P %s %s < %s", dbUser, dbHost, dbPort, dbName, sqlFile)
 
 			var stdErr bytes.Buffer
@@ -179,7 +177,6 @@ func downloadFile(fileURL, saveDir string) error {
 	if err != nil {
 		return err
 	}
-
 
 	defer outFile.Close()
 	_, err = io.Copy(outFile, resp.Body)
