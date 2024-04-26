@@ -19,6 +19,7 @@ type DatabaseConfig struct {
 	Host     string `json:"db_host"`
 	Port     string `json:"db_port"`
 	Username string `json:"db_username"`
+	ID       int    `json:"id"`
 }
 
 func main() {
@@ -33,41 +34,41 @@ func main() {
 	importStatus := make(map[string]bool)
 
 	// Iterasi semua konfigurasi database
-	for _, config := range configs {
-		// Mendapatkan detail koneksi database dari konfigurasi
+	for i := 0; i < len(configs); i++ {
+		config := configs[i]
 		dbHost := config.Host
 		dbPort := config.Port
 		dbName := config.Name
 		dbUser := config.Username
+		dbID := i + 1 // Menyesuaikan ID dengan iterasi dimulai dari 1
 
-		// Iterasi dari id 1 hingga 10
-		for id := 1; id <= 10; id++ {
-			fileURL := fmt.Sprintf("http://localhost:3000/company/%d/download", id)
-			saveDir := "../download/"
+		// Membuat URL file dengan menggunakan ID database yang sesuai
+		fileURL := fmt.Sprintf("http://localhost:3000/company/%d/download", dbID)
+		saveDir := "../download/"
 
-			if !importStatus[dbName] {
-				// Jika belum diimpor, lakukan impor
-				if err := executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir); err != nil {
-					fmt.Printf("Error executing workflow for %s: %s\n", dbName, err)
-					return
-				}
-	
-				// Setel status impor menjadi true setelah impor selesai
-				importStatus[dbName] = true
-			}
-
-			if err := removeFiles(saveDir); err != nil {
-				fmt.Printf("Error removing files: %s\n", err)
+		if !importStatus[dbName] {
+			// Jika belum diimpor, lakukan impor
+			if err := executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir); err != nil {
+				fmt.Printf("Error executing workflow for %s: %s\n", dbName, err)
 				return
 			}
 
-			zipDir := "../unzip/"
-			if err := removeFiles(zipDir); err != nil {
-				fmt.Printf("Error removing files: %s\n", err)
-				return
-			}
+			// Setel status impor menjadi true setelah impor selesai
+			importStatus[dbName] = true
+		}
+
+		if err := removeFiles(saveDir); err != nil {
+			fmt.Printf("Error removing files: %s\n", err)
+			return
+		}
+
+		zipDir := "../unzip/"
+		if err := removeFiles(zipDir); err != nil {
+			fmt.Printf("Error removing files: %s\n", err)
+			return
 		}
 	}
+
 }
 
 func removeFiles(dirPath string) error {
@@ -91,7 +92,6 @@ func removeFiles(dirPath string) error {
 
 	return nil
 }
-
 
 func readConfig(filePath string) ([]DatabaseConfig, error) {
 	configData, err := ioutil.ReadFile(filePath)
@@ -139,6 +139,9 @@ func executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir string) er
 		done <- true
 	}()
 
+	// Trace link URL
+	fmt.Println(fileURL)
+
 	// Mengunduh dan mengirim file ke channel
 	if err := downloadAndSend(fileURL, saveDir, fileChan); err != nil {
 		return err
@@ -150,7 +153,6 @@ func executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir string) er
 
 	return nil
 }
-
 
 func unzipFile(zipFile, destDir string) error {
 	r, err := zip.OpenReader(zipFile)
@@ -209,6 +211,7 @@ func findSQLFile(dir string) (string, error) {
 
 func importDatabase(dbUser, dbHost, dbPort, dbName, sqlFile string) error {
 	importCmd := fmt.Sprintf("mysql -u %s -h %s -P %s %s < %s", dbUser, dbHost, dbPort, dbName, sqlFile)
+	fmt.Printf("Importing database %s...\n", dbName)
 	var stdErr bytes.Buffer
 	cmd := exec.Command("bash", "-c", importCmd)
 	cmd.Stderr = &stdErr
@@ -252,5 +255,3 @@ func downloadAndSend(fileURL, saveDir string, fileChan chan<- string) error {
 	fileChan <- filePath
 	return nil
 }
-
-
