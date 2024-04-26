@@ -14,105 +14,55 @@ import (
 	"strings"
 )
 
-func main() {
+type DatabaseConfig struct {
+	Name     string `json:"database_name"`
+	Host     string `json:"db_host"`
+	Port     string `json:"db_port"`
+	Username string `json:"db_username"`
+}
 
-	configData, err := ioutil.ReadFile("../config.json")
+func main() {
+	// Membaca file konfigurasi
+	configs, err := readConfig("../config.json")
 	if err != nil {
 		fmt.Printf("Error reading config file: %s\n", err)
 		return
 	}
 
-	var config []map[string]string
-	err = json.Unmarshal(configData, &config)
-	if err != nil {
-		fmt.Printf("Error decoding config JSON: %s\n", err)
-		return
-	}
+	// Membuat map untuk menyimpan status impor setiap database
+	importStatus := make(map[string]bool)
 
-	dbHost := config[0]["db_host"]
-	dbPort := config[0]["db_port"]
-	dbName := config[0]["database_name"]
-	dbUser := config[0]["db_username"]
-	// dbPassword := config[0]["db_password"]
+	// Iterasi semua konfigurasi database
+	for _, config := range configs {
+		// Mendapatkan detail koneksi database dari konfigurasi
+		dbHost := config.Host
+		dbPort := config.Port
+		dbName := config.Name
+		dbUser := config.Username
 
-	// URL layanan web, ganti {id} dengan ID yang sesuai.
-	fileURL := "http://localhost:3000/company/3/download"
+		// Iterasi dari id 1 hingga 10
+		for id := 1; id <= 10; id++ {
+			fileURL := fmt.Sprintf("http://localhost:3000/company/%d/download", id)
+			saveDir := "../download/"
 
-	// Path lokal tempat file akan disimpan
-	saveDir := "../download/"
-
-	// Panggil fungsi download
-	if err := downloadFile(fileURL, saveDir); err != nil {
-		fmt.Printf("Error downloading file: %s\n", err)
-		return
-	} else {
-		fmt.Println("File downloaded successfully.")
-	}
-
-	dirPath := "../download/"
-	dir, err := os.Open(dirPath)
-	if err != nil {
-		fmt.Printf("Error opening directory: %s\n", err)
-		return
-	}
-	defer dir.Close()
-
-	files, err := dir.ReadDir(0)
-	if err != nil {
-		fmt.Printf("Error reading directory: %s\n", err)
-		return
-	}
-
-	for _, file := range files {
-		if !file.IsDir() {
-			zipFile := filepath.Join(dirPath, file.Name())
-			destDir := "../unzip/"
-
-			if err := unzipExtractor(zipFile, destDir); err != nil {
-				fmt.Println("Error unzipping file:", err)
-				return
-			} else {
-				fmt.Println("Unzipping completed successfully")
-			}
-
-			fileList, err := ioutil.ReadDir(destDir)
-			if err != nil {
-				fmt.Printf("Error reading directory: %s\n", err)
-				return
-			}
-
-			var sqlFile string
-			for _, f := range fileList {
-				if !f.IsDir() && strings.HasSuffix(f.Name(), ".sql") {
-					sqlFile = filepath.Join(destDir, f.Name())
-					break
+			if !importStatus[dbName] {
+				// Jika belum diimpor, lakukan impor
+				if err := executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir); err != nil {
+					fmt.Printf("Error executing workflow for %s: %s\n", dbName, err)
+					return
 				}
+	
+				// Setel status impor menjadi true setelah impor selesai
+				importStatus[dbName] = true
 			}
 
-			if sqlFile == "" {
-				fmt.Println("No SQL file found in the destination directory")
-				return
-			}
-
-			importCmd := fmt.Sprintf("mysql -u %s  -h %s -P %s %s < %s", dbUser, dbHost, dbPort, dbName, sqlFile)
-
-			var stdErr bytes.Buffer
-			cmd := exec.Command("bash", "-c", importCmd)
-
-			cmd.Stderr = &stdErr
-			err = cmd.Run()
-			if err != nil {
-				fmt.Printf("Error executing command: %s\n", stdErr.String())
-				return
-			}
-
-			fmt.Println("Database imported successfully")
-
-			if err := removeFiles(dirPath); err != nil {
+			if err := removeFiles(saveDir); err != nil {
 				fmt.Printf("Error removing files: %s\n", err)
 				return
 			}
-			if err := removeFiles(destDir); err != nil {
+
+			zipDir := "../unzip/"
+			if err := removeFiles(zipDir); err != nil {
 				fmt.Printf("Error removing files: %s\n", err)
 				return
 			}
@@ -120,7 +70,89 @@ func main() {
 	}
 }
 
-func unzipExtractor(zipFile, destDir string) error {
+func removeFiles(dirPath string) error {
+	dir, err := os.Open(dirPath)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+
+	files, err := dir.Readdir(-1)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		err = os.RemoveAll(filepath.Join(dirPath, file.Name()))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+
+func readConfig(filePath string) ([]DatabaseConfig, error) {
+	configData, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var configs []DatabaseConfig
+	if err := json.Unmarshal(configData, &configs); err != nil {
+		return nil, err
+	}
+
+	return configs, nil
+}
+
+func executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir string) error {
+	// Membuat channel untuk mengoordinasikan aliran kerja
+	fileChan := make(chan string)
+	done := make(chan bool)
+
+	// Goroutine untuk mengeksekusi aliran kerja
+	go func() {
+		for zipFile := range fileChan {
+			destDir := "../unzip/"
+
+			// Mengekstrak file ZIP
+			if err := unzipFile(zipFile, destDir); err != nil {
+				fmt.Println("Error unzipping file:", err)
+				return
+			}
+
+			// Mencari file SQL dalam direktori tujuan
+			sqlFile, err := findSQLFile(destDir)
+			if err != nil {
+				fmt.Println("Error finding SQL file:", err)
+				return
+			}
+
+			// Mengimpor database
+			if err := importDatabase(dbUser, dbHost, dbPort, dbName, sqlFile); err != nil {
+				fmt.Println("Error importing database:", err)
+				return
+			}
+		}
+		done <- true
+	}()
+
+	// Mengunduh dan mengirim file ke channel
+	if err := downloadAndSend(fileURL, saveDir, fileChan); err != nil {
+		return err
+	}
+
+	// Menutup channel setelah selesai
+	close(fileChan)
+	<-done
+
+	return nil
+}
+
+
+func unzipFile(zipFile, destDir string) error {
 	r, err := zip.OpenReader(zipFile)
 	if err != nil {
 		return err
@@ -160,7 +192,34 @@ func unzipExtractor(zipFile, destDir string) error {
 	return nil
 }
 
-func downloadFile(fileURL, saveDir string) error {
+func findSQLFile(dir string) (string, error) {
+	fileList, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	for _, f := range fileList {
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".sql") {
+			return filepath.Join(dir, f.Name()), nil
+		}
+	}
+
+	return "", fmt.Errorf("no SQL file found in the destination directory")
+}
+
+func importDatabase(dbUser, dbHost, dbPort, dbName, sqlFile string) error {
+	importCmd := fmt.Sprintf("mysql -u %s -h %s -P %s %s < %s", dbUser, dbHost, dbPort, dbName, sqlFile)
+	var stdErr bytes.Buffer
+	cmd := exec.Command("bash", "-c", importCmd)
+	cmd.Stderr = &stdErr
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("error executing command: %s", stdErr.String())
+	}
+	return nil
+}
+
+func downloadAndSend(fileURL, saveDir string, fileChan chan<- string) error {
 	resp, err := http.Get(fileURL)
 	if err != nil {
 		return err
@@ -168,39 +227,30 @@ func downloadFile(fileURL, saveDir string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server return non-200 status: %d %s", resp.StatusCode, resp.Status)
+		return fmt.Errorf("server returned non-200 status: %d %s", resp.StatusCode, resp.Status)
 	}
+
+	if resp.ContentLength == 0 {
+		return fmt.Errorf("no content found at URL: %s", fileURL)
+	}
+
+	// Membuat nama file berdasarkan URL, kecuali jika sudah ada file dengan nama yang sama
 	fileName := filepath.Base(fileURL)
+	filePath := filepath.Join(saveDir, fileName)
 
-	savePath := filepath.Join(saveDir, fileName)
-	outFile, err := os.Create(savePath)
+	outFile, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
-
 	defer outFile.Close()
+
 	_, err = io.Copy(outFile, resp.Body)
-	return err
-}
-
-func removeFiles(dirPath string) error {
-	dir, err := os.Open(dirPath)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-
-	files, err := dir.Readdir(-1)
 	if err != nil {
 		return err
 	}
 
-	for _, file := range files {
-		err = os.RemoveAll(filepath.Join(dirPath, file.Name()))
-		if err != nil {
-			return err
-		}
-	}
-
+	fileChan <- filePath
 	return nil
 }
+
+
