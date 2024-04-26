@@ -73,7 +73,7 @@ func processDatabases(configs []DatabaseConfig, importStatus map[string]bool, sa
 		dbPort := config.Port
 		dbName := config.Name
 		dbUser := config.Username
-		dbID := i + 1 // Menyesuaikan ID dengan iterasi dimulai dari 1
+		dbID := i + 1
 
 		fileURL := fmt.Sprintf("http://localhost:3000/company/%d/download", dbID)
 
@@ -99,11 +99,9 @@ func processDatabases(configs []DatabaseConfig, importStatus map[string]bool, sa
 }
 
 func executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir string) error {
-	// Membuat channel untuk mengoordinasikan aliran kerja
 	fileChan := make(chan string)
 	done := make(chan bool)
 
-	// Goroutine untuk mengeksekusi aliran kerja
 	go func() {
 		for zipFile := range fileChan {
 			destDir := "../unzip/"
@@ -269,7 +267,6 @@ func downloadAndSend(fileURL, saveDir string, fileChan chan<- string) error {
             return
         }
 
-        // Membuat nama file berdasarkan URL, kecuali jika sudah ada file dengan nama yang sama
         fileName := filepath.Base(fileURL)
         filePath := filepath.Join(saveDir, fileName)
 
@@ -286,8 +283,8 @@ func downloadAndSend(fileURL, saveDir string, fileChan chan<- string) error {
             return
         }
 
-        fileChan <- filePath // Mengirim path file yang didownload ke channel
-        errChan <- nil       // Mengirim sinyal bahwa tidak ada error
+        fileChan <- filePath 
+        errChan <- nil      
     }()
 
     // Menunggu goroutine selesai atau error
