@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type DatabaseConfig struct {
@@ -23,88 +24,78 @@ type DatabaseConfig struct {
 }
 
 func main() {
-	// Membaca file konfigurasi
-	configs, err := readConfig("../config.json")
-	if err != nil {
-		fmt.Printf("Error reading config file: %s\n", err)
-		return
-	}
+    startTime := time.Now()
+    configChan := make(chan []DatabaseConfig)
+    
+    go readConfigAsync("../config.json", configChan)
+    configs := <-configChan
+    
+    importStatus := make(map[string]bool)
+    saveDir := "../download/"
+    
+    if err := processDatabases(configs, importStatus, saveDir); err != nil {
+        fmt.Printf("Error processing databases: %s\n", err)
+        return
+    }
+    
+    endTime := time.Now()
+    executionTime := endTime.Sub(startTime).Seconds()
+    fmt.Printf("Execution time: %.2f seconds\n", executionTime)
+}
 
-	// Membuat map untuk menyimpan status impor setiap database
-	importStatus := make(map[string]bool)
+func readConfigAsync(filePath string, configChan chan<- []DatabaseConfig) {
+    configs, err := readConfig(filePath)
+    if err != nil {
+        fmt.Printf("Error reading config file: %s\n", err)
+        configChan <- nil
+        return
+    }
+    configChan <- configs
+}
 
-	// Iterasi semua konfigurasi database
-	for i := 0; i < len(configs); i++ {
-		config := configs[i]
+func readConfig(filePath string) ([]DatabaseConfig, error) {
+    configData, err := ioutil.ReadFile(filePath)
+    if err != nil {
+        return nil, err
+    }
+
+    var configs []DatabaseConfig
+    if err := json.Unmarshal(configData, &configs); err != nil {
+        return nil, err
+    }
+
+    return configs, nil
+}
+
+func processDatabases(configs []DatabaseConfig, importStatus map[string]bool, saveDir string) error {
+	for i, config := range configs {
 		dbHost := config.Host
 		dbPort := config.Port
 		dbName := config.Name
 		dbUser := config.Username
 		dbID := i + 1 // Menyesuaikan ID dengan iterasi dimulai dari 1
 
-		// Membuat URL file dengan menggunakan ID database yang sesuai
 		fileURL := fmt.Sprintf("http://localhost:3000/company/%d/download", dbID)
-		saveDir := "../download/"
 
 		if !importStatus[dbName] {
-			// Jika belum diimpor, lakukan impor
 			if err := executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir); err != nil {
-				fmt.Printf("Error executing workflow for %s: %s\n", dbName, err)
-				return
+				return fmt.Errorf("error executing workflow for %s: %s", dbName, err)
 			}
-
-			// Setel status impor menjadi true setelah impor selesai
 			importStatus[dbName] = true
 		}
 
 		if err := removeFiles(saveDir); err != nil {
 			fmt.Printf("Error removing files: %s\n", err)
-			return
+			return err
 		}
 
 		zipDir := "../unzip/"
 		if err := removeFiles(zipDir); err != nil {
 			fmt.Printf("Error removing files: %s\n", err)
-			return
-		}
-	}
-
-}
-
-func removeFiles(dirPath string) error {
-	dir, err := os.Open(dirPath)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-
-	files, err := dir.Readdir(-1)
-	if err != nil {
-		return err
-	}
-
-	for _, file := range files {
-		err = os.RemoveAll(filepath.Join(dirPath, file.Name()))
-		if err != nil {
 			return err
 		}
 	}
-
 	return nil
-}
-
-func readConfig(filePath string) ([]DatabaseConfig, error) {
-	configData, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var configs []DatabaseConfig
-	if err := json.Unmarshal(configData, &configs); err != nil {
-		return nil, err
-	}
-
-	return configs, nil
 }
 
 func executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir string) error {
@@ -155,43 +146,60 @@ func executeWorkflow(dbUser, dbHost, dbPort, dbName, fileURL, saveDir string) er
 }
 
 func unzipFile(zipFile, destDir string) error {
-	r, err := zip.OpenReader(zipFile)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
+    // Membuat channel untuk mengirim error
+    errChan := make(chan error)
 
-	os.MkdirAll(destDir, 0755)
-	for _, f := range r.File {
-		if filepath.Base(f.Name) == "__MACOSX" || strings.HasPrefix(filepath.Base(f.Name), "._") {
-			continue
-		}
-		filePath := filepath.Join(destDir, f.Name)
+    // Goroutine untuk mengekstrak file ZIP
+    go func() {
+        r, err := zip.OpenReader(zipFile)
+        if err != nil {
+            errChan <- err
+            return
+        }
+        defer r.Close()
 
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(filePath, f.Mode())
-			continue
-		}
+        os.MkdirAll(destDir, 0755)
+        for _, f := range r.File {
+            if filepath.Base(f.Name) == "__MACOSX" || strings.HasPrefix(filepath.Base(f.Name), "._") {
+                continue
+            }
+            filePath := filepath.Join(destDir, f.Name)
 
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
+            if f.FileInfo().IsDir() {
+                os.MkdirAll(filePath, f.Mode())
+                continue
+            }
 
-		fDest, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			return err
-		}
-		defer fDest.Close()
+            rc, err := f.Open()
+            if err != nil {
+                errChan <- err
+                return
+            }
+            defer rc.Close()
 
-		_, err = io.Copy(fDest, rc)
-		if err != nil {
-			return err
-		}
-	}
+            fDest, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+            if err != nil {
+                errChan <- err
+                return
+            }
+            defer fDest.Close()
 
-	return nil
+            _, err = io.Copy(fDest, rc)
+            if err != nil {
+                errChan <- err
+                return
+            }
+        }
+
+        errChan <- nil // Mengirim sinyal bahwa tidak ada error
+    }()
+
+    // Menunggu goroutine selesai atau error
+    if err := <-errChan; err != nil {
+        return err
+    }
+
+    return nil
 }
 
 func findSQLFile(dir string) (string, error) {
@@ -210,48 +218,120 @@ func findSQLFile(dir string) (string, error) {
 }
 
 func importDatabase(dbUser, dbHost, dbPort, dbName, sqlFile string) error {
-	importCmd := fmt.Sprintf("mysql -u %s -h %s -P %s %s < %s", dbUser, dbHost, dbPort, dbName, sqlFile)
-	fmt.Printf("Importing database %s...\n", dbName)
-	var stdErr bytes.Buffer
-	cmd := exec.Command("bash", "-c", importCmd)
-	cmd.Stderr = &stdErr
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("error executing command: %s", stdErr.String())
-	}
-	return nil
+    // Membuat channel untuk mengirim error
+    errChan := make(chan error)
+
+    // Goroutine untuk mengimpor database
+    go func() {
+        importCmd := fmt.Sprintf("mysql -u %s -h %s -P %s %s < %s", dbUser, dbHost, dbPort, dbName, sqlFile)
+        fmt.Printf("Importing database %s...\n", dbName)
+        var stdErr bytes.Buffer
+        cmd := exec.Command("bash", "-c", importCmd)
+        cmd.Stderr = &stdErr
+        err := cmd.Run()
+        if err != nil {
+            errChan <- fmt.Errorf("error executing command: %s", stdErr.String())
+            return
+        }
+
+        errChan <- nil // Mengirim sinyal bahwa tidak ada error
+    }()
+
+    // Menunggu goroutine selesai atau error
+    if err := <-errChan; err != nil {
+        return err
+    }
+
+    return nil
 }
+
 
 func downloadAndSend(fileURL, saveDir string, fileChan chan<- string) error {
-	resp, err := http.Get(fileURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+    // Membuat channel untuk mengirim error
+    errChan := make(chan error)
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned non-200 status: %d %s", resp.StatusCode, resp.Status)
-	}
+    // Goroutine untuk download file
+    go func() {
+        resp, err := http.Get(fileURL)
+        if err != nil {
+            errChan <- err
+            return
+        }
+        defer resp.Body.Close()
 
-	if resp.ContentLength == 0 {
-		return fmt.Errorf("no content found at URL: %s", fileURL)
-	}
+        if resp.StatusCode != http.StatusOK {
+            errChan <- fmt.Errorf("server returned non-200 status: %d %s", resp.StatusCode, resp.Status)
+            return
+        }
 
-	// Membuat nama file berdasarkan URL, kecuali jika sudah ada file dengan nama yang sama
-	fileName := filepath.Base(fileURL)
-	filePath := filepath.Join(saveDir, fileName)
+        if resp.ContentLength == 0 {
+            errChan <- fmt.Errorf("no content found at URL: %s", fileURL)
+            return
+        }
 
-	outFile, err := os.Create(filePath)
-	if err != nil {
-		return err
-	}
-	defer outFile.Close()
+        // Membuat nama file berdasarkan URL, kecuali jika sudah ada file dengan nama yang sama
+        fileName := filepath.Base(fileURL)
+        filePath := filepath.Join(saveDir, fileName)
 
-	_, err = io.Copy(outFile, resp.Body)
-	if err != nil {
-		return err
-	}
+        outFile, err := os.Create(filePath)
+        if err != nil {
+            errChan <- err
+            return
+        }
+        defer outFile.Close()
 
-	fileChan <- filePath
-	return nil
+        _, err = io.Copy(outFile, resp.Body)
+        if err != nil {
+            errChan <- err
+            return
+        }
+
+        fileChan <- filePath // Mengirim path file yang didownload ke channel
+        errChan <- nil       // Mengirim sinyal bahwa tidak ada error
+    }()
+
+    // Menunggu goroutine selesai atau error
+    if err := <-errChan; err != nil {
+        return err
+    }
+
+    return nil
 }
+func removeFiles(dirPath string) error {
+    // Membuat channel untuk mengirim error
+    errChan := make(chan error)
+
+    // Goroutine untuk menghapus file
+    go func() {
+        dir, err := os.Open(dirPath)
+        if err != nil {
+            errChan <- err
+            return
+        }
+        defer dir.Close()
+
+        files, err := dir.Readdir(-1)
+        if err != nil {
+            errChan <- err
+            return
+        }
+
+        for _, file := range files {
+            err = os.RemoveAll(filepath.Join(dirPath, file.Name()))
+            if err != nil {
+                errChan <- err
+                return
+            }
+        }
+
+        errChan <- nil // Mengirim sinyal bahwa tidak ada error
+    }()
+
+    // Menunggu goroutine selesai atau error
+    if err := <-errChan; err != nil {
+        return err
+    }
+
+    return nil
+}
+
