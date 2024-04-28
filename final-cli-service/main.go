@@ -2,12 +2,14 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -43,11 +45,19 @@ func main() {
 	}
 
 	unzip := UnzipFileWithWorker(download, 2, "../web-service/unzip/")
-    for result := range unzip {
-        if result.Error != nil {
-            fmt.Println("Error:", result.Error)
-        }
-    }
+	for result := range unzip {
+		if result.Error != nil {
+			fmt.Println("Error:", result.Error)
+		}
+	}
+
+	importDatabase := ImportFileWithWorker(unzip, 2, "../web-service/unzip/")
+	fmt.Print("tidak mau import, ", importDatabase)
+	for result := range importDatabase {
+		if result.Error != nil {
+			fmt.Println("Error:", result.Error)
+		}
+	}
 }
 
 func BacaConfig(filePath string) ([]DatabaseConfig, error) {
@@ -153,40 +163,39 @@ func DownloadFile(fileURL, saveDir string) error {
 }
 
 func UnzipFileWithWorker(chin chan DatabaseConfig, worker int, destDir string) chan DatabaseConfig {
-    chout := make(chan DatabaseConfig)
-    wg := sync.WaitGroup{}
-    files, err := ioutil.ReadDir("../web-service/download/")
-    if err != nil {
-        chout <- DatabaseConfig{Error: fmt.Errorf("error reading download directory: %s", err)}
-        close(chout)
-        return chout
-    }
+	chout := make(chan DatabaseConfig)
+	wg := sync.WaitGroup{}
+	files, err := ioutil.ReadDir("../web-service/download/")
+	if err != nil {
+		chout <- DatabaseConfig{Error: fmt.Errorf("error reading download directory: %s", err)}
+		close(chout)
+		return chout
+	}
 
-    for _, file := range files {
-        if !file.IsDir() && strings.HasSuffix(file.Name(), ".zip") {
-            zipFile := filepath.Join("../web-service/download/", file.Name())
-            wg.Add(1)
-            go func(zipFile string) {
-                defer wg.Done()
-                destDir := filepath.Join(destDir, strings.TrimSuffix(file.Name(), ".zip"))
-                unzipFile := GoRoutineUnzipFile(chin, destDir, zipFile)
-                for result := range unzipFile {
-                    if result.Error != nil {
-                        chout <- result
-                    }
-                }
-            }(zipFile)
-        }
-    }
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".zip") {
+			zipFile := filepath.Join("../web-service/download/", file.Name())
+			wg.Add(1)
+			go func(zipFile string) {
+				defer wg.Done()
+				destDir := filepath.Join(destDir, strings.TrimSuffix(file.Name(), ".zip"))
+				unzipFile := GoRoutineUnzipFile(chin, destDir, zipFile)
+				for result := range unzipFile {
+					if result.Error != nil {
+						chout <- result
+					}
+				}
+			}(zipFile)
+		}
+	}
 
-    go func() {
-        wg.Wait()
-        close(chout)
-    }()
-    
-    return chout
+	go func() {
+		wg.Wait()
+		close(chout)
+	}()
+
+	return chout
 }
-
 
 func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan DatabaseConfig {
 	chKeluar := make(chan DatabaseConfig)
@@ -244,4 +253,68 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 	}()
 
 	return chKeluar
+}
+
+func ImportFileWithWorker(chin chan DatabaseConfig, worker int, sqlFile string) chan DatabaseConfig {
+	channels := []chan DatabaseConfig{}
+
+	chout := make(chan DatabaseConfig)
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(worker)
+
+	go func() {
+		wg.Wait()
+		close(chout)
+	}()
+
+	//Fan-in
+	for i := 0; i < worker; i++ {
+		channels = append(channels, GoroutineImportFile(chin, sqlFile))
+	}
+
+	//Fan-out
+	for _, ch := range channels {
+		go func(channel chan DatabaseConfig) {
+			for c := range channel {
+				chout <- c
+			}
+
+			wg.Done()
+		}(ch)
+
+	}
+
+	return chout
+}
+
+func GoroutineImportFile(chin chan DatabaseConfig, sqlFile string) chan DatabaseConfig {
+	chout := make(chan DatabaseConfig)
+
+	go func() {
+		defer close(chout)
+
+		for db := range chin {
+			if db.Error != nil {
+				chout <- db
+			}
+
+			importCmd := fmt.Sprintf("mysql -u %s -h %s -P %s %s < %s", db.Username, db.Host, db.Port, db.Name, sqlFile)
+			var stdErr bytes.Buffer
+
+			cmd := exec.Command("bash", "-c", importCmd)
+			cmd.Stderr = &stdErr
+
+			err := cmd.Run()
+			if err != nil {
+				fmt.Printf("error executing command: %s", stdErr.String())
+				return
+			}
+
+			chout <- db
+		}
+	}()
+
+	return chout
 }
