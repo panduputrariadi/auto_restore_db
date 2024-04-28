@@ -51,11 +51,27 @@ func main() {
 		}
 	}
 
-	importDatabase := ImportFileWithWorker(unzip, 2, "../web-service/unzip")
-	fmt.Print("tidak mau import, ", importDatabase)
+	importDatabase := ImportFileWithWorker(unzip, 2, "../web-service/unzip/")
+	// fmt.Println(importDatabase)
 	for result := range importDatabase {
 		if result.Error != nil {
 			fmt.Println("Error:", result.Error)
+		}
+	}
+
+	rmDownload := "../web-service/download/"
+
+	deleteFileDownload := DeleteFileWithWorker(unzip, 2, rmDownload)
+	for result := range deleteFileDownload {
+		if result.Error != nil {
+			fmt.Printf("Error removing files: %s\n", err)
+		}
+	}
+	rmZip := "../web-service/unzip/"
+	deleteFileZip := DeleteFileWithWorker(deleteFileDownload, 2, rmZip)
+	for result := range deleteFileZip {
+		if result.Error != nil {
+			fmt.Printf("Error removing files: %s\n", err)
 		}
 	}
 }
@@ -121,7 +137,7 @@ func GoRoutineDownloadFile(chMasuk chan DatabaseConfig, configs []DatabaseConfig
 			if err := DownloadFile(fileURL, saveDir); err != nil {
 				fmt.Printf("Error downloading file on db name: %s\n", err)
 			} else {
-				fmt.Println("File downloaded successfully: ", dbName, "on url: ", fileURL)
+				fmt.Println("File downloaded successfully: ", dbName)
 			}
 
 		}
@@ -209,7 +225,6 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 		}
 		defer r.Close()
 
-		// Ambil nama database dari struct DatabaseConfig
 		var dbName string
 		for db := range chin {
 			if db.Error != nil {
@@ -228,7 +243,6 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 			// code untuk ekstrak unzip file
 			extractedFilePath := filepath.Join(destDir, dbName, filepath.Base(f.Name))
 
-			// code membuat firektori untuk ekstrak file
 			if f.FileInfo().IsDir() {
 				os.MkdirAll(extractedFilePath, f.Mode())
 				continue
@@ -264,9 +278,7 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 	return chKeluar
 }
 
-
-
-func ImportFileWithWorker(chin chan DatabaseConfig, worker int, sqlFile string) chan DatabaseConfig {
+func ImportFileWithWorker(chin chan DatabaseConfig, worker int, destDir string) chan DatabaseConfig {
 	channels := []chan DatabaseConfig{}
 
 	chout := make(chan DatabaseConfig)
@@ -282,7 +294,7 @@ func ImportFileWithWorker(chin chan DatabaseConfig, worker int, sqlFile string) 
 
 	//Fan-in
 	for i := 0; i < worker; i++ {
-		channels = append(channels, GoroutineImportFile(chin, sqlFile))
+		channels = append(channels, GoroutineImportFile(chin, destDir))
 	}
 
 	//Fan-out
@@ -300,7 +312,7 @@ func ImportFileWithWorker(chin chan DatabaseConfig, worker int, sqlFile string) 
 	return chout
 }
 
-func GoroutineImportFile(chin chan DatabaseConfig, sqlFile string) chan DatabaseConfig {
+func GoroutineImportFile(chin chan DatabaseConfig, unzipDir string) chan DatabaseConfig {
 	chout := make(chan DatabaseConfig)
 
 	go func() {
@@ -309,6 +321,13 @@ func GoroutineImportFile(chin chan DatabaseConfig, sqlFile string) chan Database
 		for db := range chin {
 			if db.Error != nil {
 				chout <- db
+				continue
+			}
+
+			sqlFile, err := readSql(unzipDir)
+			if err != nil {
+				chout <- DatabaseConfig{Error: fmt.Errorf("error reading SQL file: %v", err)}
+				continue
 			}
 
 			importCmd := fmt.Sprintf("mysql -u %s -h %s -P %s %s < %s", db.Username, db.Host, db.Port, db.Name, sqlFile)
@@ -317,10 +336,111 @@ func GoroutineImportFile(chin chan DatabaseConfig, sqlFile string) chan Database
 			cmd := exec.Command("bash", "-c", importCmd)
 			cmd.Stderr = &stdErr
 
-			err := cmd.Run()
+			err = cmd.Run()
 			if err != nil {
-				fmt.Printf("error executing command: %s", stdErr.String())
+				chout <- DatabaseConfig{Error: fmt.Errorf("error executing command: %v\nstderr: %s", err, stdErr.String())}
+				continue
+			}
+
+			chout <- db
+		}
+	}()
+
+	return chout
+}
+
+func readSql(destDir string) (string, error) {
+	// Mencari file SQL dalam direktori tujuan
+	sqlFile, err := FindSQLFile(destDir)
+	if err != nil {
+		fmt.Println("Error finding SQL file:", err.Error())
+		return "", err
+	} else {
+		fmt.Println(sqlFile)
+	}
+
+	return sqlFile, err
+}
+
+func FindSQLFile(dir string) (string, error) {
+	fileList, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	for _, f := range fileList {
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".sql") {
+			return filepath.Join(dir, f.Name()), nil
+		}
+	}
+
+	return "", fmt.Errorf("no SQL file found in the destination directory")
+}
+
+func DeleteFileWithWorker(chin chan DatabaseConfig, worker int, dirPath string) chan DatabaseConfig {
+	channels := []chan DatabaseConfig{}
+
+	chout := make(chan DatabaseConfig)
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(worker)
+
+	go func() {
+		wg.Wait()
+		close(chout)
+	}()
+
+	//Fan-in
+	for i := 0; i < worker; i++ {
+		channels = append(channels, GoroutineDeleteFile(chin, dirPath))
+	}
+
+	//Fan-out
+	for _, ch := range channels {
+		go func(channel chan DatabaseConfig) {
+			for c := range channel {
+				chout <- c
+			}
+
+			wg.Done()
+		}(ch)
+
+	}
+
+	return chout
+}
+
+func GoroutineDeleteFile(chin chan DatabaseConfig, dirPath string) chan DatabaseConfig {
+	chout := make(chan DatabaseConfig)
+
+	go func() {
+		defer close(chout)
+
+		for db := range chin {
+			if db.Error != nil {
+				chout <- db
+				continue
+			}
+			dir, err := os.Open(dirPath)
+			if err != nil {
+				chout <- DatabaseConfig{Error: fmt.Errorf("error reading SQL file: %v", err)}
 				return
+			}
+			defer dir.Close()
+
+			files, err := dir.Readdir(-1)
+			if err != nil {
+				chout <- DatabaseConfig{Error: fmt.Errorf("error reading SQL file: %v", err)}
+				return
+			}
+
+			for _, file := range files {
+				err = os.RemoveAll(filepath.Join(dirPath, file.Name()))
+				if err != nil {
+					chout <- DatabaseConfig{Error: fmt.Errorf("error reading SQL file: %v", err)}
+					return
+				}
 			}
 
 			chout <- db
