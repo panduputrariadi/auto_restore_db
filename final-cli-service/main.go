@@ -51,7 +51,7 @@ func main() {
 		}
 	}
 
-	importDatabase := ImportFileWithWorker(unzip, 2, "../web-service/unzip/")
+	importDatabase := ImportFileWithWorker(unzip, 2, "../web-service/unzip")
 	fmt.Print("tidak mau import, ", importDatabase)
 	for result := range importDatabase {
 		if result.Error != nil {
@@ -178,7 +178,6 @@ func UnzipFileWithWorker(chin chan DatabaseConfig, worker int, destDir string) c
 			wg.Add(1)
 			go func(zipFile string) {
 				defer wg.Done()
-				destDir := filepath.Join(destDir, strings.TrimSuffix(file.Name(), ".zip"))
 				unzipFile := GoRoutineUnzipFile(chin, destDir, zipFile)
 				for result := range unzipFile {
 					if result.Error != nil {
@@ -209,7 +208,17 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 			return
 		}
 		defer r.Close()
-		os.MkdirAll(destDir, 0755)
+
+		// Ambil nama database dari struct DatabaseConfig
+		var dbName string
+		for db := range chin {
+			if db.Error != nil {
+				chKeluar <- DatabaseConfig{Error: fmt.Errorf("failed to get database name: %v", db.Error)}
+				return
+			}
+			dbName = db.Name
+			continue
+		}
 
 		for _, f := range r.File {
 			if filepath.Base(f.Name) == "__MACOSX" || strings.HasPrefix(filepath.Base(f.Name), "._") {
@@ -217,7 +226,7 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 			}
 
 			// code untuk ekstrak unzip file
-			extractedFilePath := filepath.Join(destDir, f.Name)
+			extractedFilePath := filepath.Join(destDir, dbName, filepath.Base(f.Name))
 
 			// code membuat firektori untuk ekstrak file
 			if f.FileInfo().IsDir() {
@@ -254,6 +263,8 @@ func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan 
 
 	return chKeluar
 }
+
+
 
 func ImportFileWithWorker(chin chan DatabaseConfig, worker int, sqlFile string) chan DatabaseConfig {
 	channels := []chan DatabaseConfig{}
