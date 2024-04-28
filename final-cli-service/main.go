@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -22,12 +24,12 @@ type DatabaseConfig struct {
 
 func main() {
 	configs, err := BacaConfig("config.json")
-    if err != nil {
-        fmt.Printf("Error reading config file: %s\n", err)
-        return
-    }
+	if err != nil {
+		fmt.Printf("Error reading config file: %s\n", err)
+		return
+	}
 
-	ch:= make(chan DatabaseConfig)
+	ch := make(chan DatabaseConfig)
 	go func() {
 		defer close(ch)
 		for _, db := range configs {
@@ -35,12 +37,18 @@ func main() {
 		}
 	}()
 
-	download:= DownloadFileWithWorker(ch, 2, configs)
+	download := DownloadFileWithWorker(ch, 2, configs)
 	for result := range download {
 		fmt.Println(result)
 	}
-}
 
+	unzip := UnzipFileWithWorker(download, 2, "../web-service/unzip/")
+    for result := range unzip {
+        if result.Error != nil {
+            fmt.Println("Error:", result.Error)
+        }
+    }
+}
 
 func BacaConfig(filePath string) ([]DatabaseConfig, error) {
 	configData, err := ioutil.ReadFile(filePath)
@@ -72,7 +80,7 @@ func DownloadFileWithWorker(chin chan DatabaseConfig, worker int, configs []Data
 
 	for i := 0; i < worker; i++ {
 		channels = append(channels, GoRoutineDownloadFile(chin, configs))
-		
+
 	}
 
 	for _, ch := range channels {
@@ -89,9 +97,9 @@ func DownloadFileWithWorker(chin chan DatabaseConfig, worker int, configs []Data
 	return chout
 }
 
-func GoRoutineDownloadFile(chMasuk chan DatabaseConfig, configs []DatabaseConfig) chan DatabaseConfig{
+func GoRoutineDownloadFile(chMasuk chan DatabaseConfig, configs []DatabaseConfig) chan DatabaseConfig {
 	chKeluar := make(chan DatabaseConfig)
-	go func ()  {
+	go func() {
 		defer close(chKeluar)
 		for i, config := range configs {
 			dbName := config.Name
@@ -100,12 +108,12 @@ func GoRoutineDownloadFile(chMasuk chan DatabaseConfig, configs []DatabaseConfig
 			saveDir := "./download/"
 			fileURL := fmt.Sprintf("http://localhost:3000/company/%d/download", dbID)
 
-			if err := DownloadFile(fileURL, saveDir);  err != nil {
+			if err := DownloadFile(fileURL, saveDir); err != nil {
 				fmt.Printf("Error downloading file on db name: %s\n", err)
 			} else {
-				fmt.Println("File downloaded successfully: ", dbName)
+				fmt.Println("File downloaded successfully: ", dbName, "on url: ", fileURL)
 			}
-	
+
 		}
 	}()
 
@@ -142,4 +150,98 @@ func DownloadFile(fileURL, saveDir string) error {
 	}
 
 	return nil
+}
+
+func UnzipFileWithWorker(chin chan DatabaseConfig, worker int, destDir string) chan DatabaseConfig {
+    chout := make(chan DatabaseConfig)
+    wg := sync.WaitGroup{}
+    files, err := ioutil.ReadDir("../web-service/download/")
+    if err != nil {
+        chout <- DatabaseConfig{Error: fmt.Errorf("error reading download directory: %s", err)}
+        close(chout)
+        return chout
+    }
+
+    for _, file := range files {
+        if !file.IsDir() && strings.HasSuffix(file.Name(), ".zip") {
+            zipFile := filepath.Join("../web-service/download/", file.Name())
+            wg.Add(1)
+            go func(zipFile string) {
+                defer wg.Done()
+                destDir := filepath.Join(destDir, strings.TrimSuffix(file.Name(), ".zip"))
+                unzipFile := GoRoutineUnzipFile(chin, destDir, zipFile)
+                for result := range unzipFile {
+                    if result.Error != nil {
+                        chout <- result
+                    }
+                }
+            }(zipFile)
+        }
+    }
+
+    go func() {
+        wg.Wait()
+        close(chout)
+    }()
+    
+    return chout
+}
+
+
+func GoRoutineUnzipFile(chin chan DatabaseConfig, destDir, zipFile string) chan DatabaseConfig {
+	chKeluar := make(chan DatabaseConfig)
+
+	go func() {
+		defer close(chKeluar)
+
+		r, err := zip.OpenReader(zipFile)
+		if err != nil {
+			chKeluar <- DatabaseConfig{Error: fmt.Errorf("failed to open read ZIP file: %v", err)}
+			return
+		}
+		defer r.Close()
+		os.MkdirAll(destDir, 0755)
+
+		for _, f := range r.File {
+			if filepath.Base(f.Name) == "__MACOSX" || strings.HasPrefix(filepath.Base(f.Name), "._") {
+				continue
+			}
+
+			// code untuk ekstrak unzip file
+			extractedFilePath := filepath.Join(destDir, f.Name)
+
+			// code membuat firektori untuk ekstrak file
+			if f.FileInfo().IsDir() {
+				os.MkdirAll(extractedFilePath, f.Mode())
+				continue
+			}
+
+			// jika file bukan sebuah direktori
+			rc, err := f.Open()
+			if err != nil {
+				chKeluar <- DatabaseConfig{Error: fmt.Errorf("failed to open file in ZIP: %v", err)}
+				return
+			}
+			defer rc.Close()
+
+			// membuat destinasi file
+			fDest, err := os.OpenFile(extractedFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				chKeluar <- DatabaseConfig{Error: fmt.Errorf("failed to create destination file: %v", err)}
+				return
+			}
+			defer fDest.Close()
+
+			// copy file menuju destinasinya
+			_, err = io.Copy(fDest, rc)
+			if err != nil {
+				chKeluar <- DatabaseConfig{Error: fmt.Errorf("failed to copy file contents: %v", err)}
+				return
+			}
+		}
+
+		chKeluar <- DatabaseConfig{Error: nil}
+	}()
+
+	return chKeluar
 }
