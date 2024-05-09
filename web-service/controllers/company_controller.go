@@ -1,23 +1,22 @@
 package controllers
 
 import (
+	"final-project/sekolah-beta/middleware"
 	"final-project/sekolah-beta/utils"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/sirupsen/logrus"
 )
 
 func RouteCompany(app *fiber.App) {
-	CompanyGroup := app.Group("/company")
-	CompanyGroup.Get("/", ReadAllCompany)
-	CompanyGroup.Get("/:id", GetCompanyById)
-	CompanyGroup.Get("/:id/download", DownloadCompanyHistory)
+	CompanyGroup := app.Group("/company", middleware.CheckClient)
+	CompanyGroup.Get("/", middleware.CheckClient, ReadAllCompany)
+	CompanyGroup.Get("/search", middleware.CheckClient, GetCompanyById)
+	CompanyGroup.Get("/download", middleware.CheckClient, DownloadCompanyHistory)
 }
-
 
 func ReadAllCompany(c *fiber.Ctx) error {
 	companyData, err := utils.ReadAllCompany()
@@ -38,111 +37,77 @@ func ReadAllCompany(c *fiber.Ctx) error {
 }
 
 func GetCompanyById(c *fiber.Ctx) error {
-	companyId, err := strconv.Atoi(c.Params("id"))
-	if err != nil {
+	companyName := c.Query("company_name")
+
+	if companyName == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(
-			map[string]any{
-				"message": "ID not valid",
+			map[string]interface{}{
+				"message": "Company name is required in query parameter",
 			},
 		)
 	}
 
-	carData, err := utils.GetCompanyID(uint(companyId))
+	companyData, err := utils.GetCompanyID(companyName)
 	if err != nil {
 		if err.Error() == "record not found" {
 			return c.Status(fiber.StatusNotFound).JSON(
-				map[string]any{
-					"message": "ID not found",
+				map[string]interface{}{
+					"message": "Company not found",
 				},
 			)
 		}
-		logrus.Error("Error on get car data: ", err.Error())
+		logrus.Error("Error on get company data: ", err.Error())
 		return c.Status(fiber.StatusInternalServerError).JSON(
-			map[string]any{
+			map[string]interface{}{
 				"message": "Server Error",
 			},
 		)
 	}
 
 	return c.Status(fiber.StatusOK).JSON(
-		map[string]any{
-			"data":    carData,
+		map[string]interface{}{
+			"data":    companyData,
 			"message": "Success",
 		},
 	)
 }
 
 func DownloadCompanyHistory(c *fiber.Ctx) error {
-	companyId, err := strconv.Atoi(c.Params("id"))
-	if err != nil {
+	companyName := c.Query("company_name")
+
+	if companyName == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(
 			map[string]interface{}{
-				"message": "ID not valid",
+				"message": "Company name is required in query parameter",
 			},
 		)
 	}
 
-	filePath, err := utils.DownloadCompanyHistoryFile(uint(companyId))
+	filePath, err := utils.DownloadCompanyHistoryFile(companyName)
 	if err != nil {
 		logrus.Error("Error retrieving latest company history file: ", err.Error())
-		return c.Status(fiber.StatusInternalServerError).JSON(
-			map[string]interface{}{
-				"message": "Server Error",
-			},
-		)
-	}
-	downloadFolder := "./download"
-
-	// Membuat folder jika belum ada
-	if _, err := os.Stat(downloadFolder); os.IsNotExist(err) {
-		err := os.MkdirAll(downloadFolder, 0755)
-		if err != nil {
-			logrus.Error("Error creating download folder: ", err.Error())
-			return c.Status(fiber.StatusInternalServerError).JSON(
-				map[string]interface{}{
-					"message": "Server Error",
-				},
-			)
-		}
+		return c.Status(fiber.StatusInternalServerError).JSON(map[string]interface{}{
+			"message": "Server Error",
+		})
 	}
 
-	// Menentukan path lengkap file tujuan dalam folder download
-	downloadPath := filepath.Join(downloadFolder, filepath.Base(filePath))
-
-	// Membuka file asli
 	sourceFile, err := os.Open(filePath)
 	if err != nil {
 		logrus.Error("Error opening original file: ", err.Error())
-		return c.Status(fiber.StatusInternalServerError).JSON(
-			map[string]interface{}{
-				"message": "Server Error",
-			},
-		)
+		return c.Status(fiber.StatusInternalServerError).JSON(map[string]interface{}{
+			"message": "Server Error",
+		})
 	}
 	defer sourceFile.Close()
 
-	// Membuat file tujuan
-	destinationFile, err := os.Create(downloadPath)
-	if err != nil {
-		logrus.Error("Error creating destination file: ", err.Error())
-		return c.Status(fiber.StatusInternalServerError).JSON(
-			map[string]interface{}{
-				"message": "Server Error",
-			},
-		)
-	}
-	defer destinationFile.Close()
+	c.Set(fiber.HeaderContentDisposition, "attachment; filename="+filepath.Base(filePath))
 
-	// Menyalin isi file asli ke file tujuan
-	_, err = io.Copy(destinationFile, sourceFile)
-	if err != nil {
-		logrus.Error("Error copying file: ", err.Error())
-		return c.Status(fiber.StatusInternalServerError).JSON(
-			map[string]interface{}{
-				"message": "Server Error",
-			},
-		)
+	if _, err := io.Copy(c, sourceFile); err != nil {
+		logrus.Error("Error copying file to response: ", err.Error())
+		return c.Status(fiber.StatusInternalServerError).JSON(map[string]interface{}{
+			"message": "Server Error",
+		})
 	}
 
-	return c.Download(downloadPath)
+	return nil
 }

@@ -10,19 +10,15 @@ func ReadAllCompany()([]model.Company, error){
 	return company.GetAllCompany(config.Mysql.DB)
 }
 
-func GetCompanyID(id uint) (model.Company, error) {
+func GetCompanyID(name string) (model.Company, error) {
 	company := model.Company{
-		Model: model.Model{
-			ID: id,
-		},
+		CompanyName: name,
 	}
 	return company.GetCompanyById(config.Mysql.DB)
 }
-func DownloadCompanyHistoryFile(companyID uint) (string, error) {
+func DownloadCompanyHistoryFile(companyName string) (string, error) {
 	company := model.Company{
-		Model: model.Model{
-			ID: companyID,
-		},
+		CompanyName: companyName,
 	}
-	return company.DownloadCompanyHistoryFile(config.Mysql.DB, companyID)
+	return company.DownloadCompanyHistoryFile(config.Mysql.DB, companyName)
 }

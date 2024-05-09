@@ -13,7 +13,7 @@ func (cr *Company) GetCompanyById(db *gorm.DB) (Company, error) {
 
 	err := db.
 		Model(Company{}).
-		Where("id = ?", cr.Model.ID).
+		Where("company_name = ?", cr.CompanyName).
 		Preload("Histories").
 		Take(&res).
 		Error
@@ -46,20 +46,22 @@ func (cr *Company) GetAllCompany(db *gorm.DB) ([]Company, error) {
 }
 
 
-func (cr *Company) DownloadCompanyHistoryFile(db *gorm.DB, companyID uint) (string, error) {
-	var history History
-	err := db.
-		Model(&History{}).
-		Select("file").
-		Where("database_name = ?", companyID).
-		Order("updated_at desc"). // Jika Anda ingin mengambil yang terbaru, urutkan berdasarkan tanggal yang terbaru
-		Limit(1).                // Ambil hanya satu record yang terbaru
-		First(&history).
-		Error
+func (cr *Company) DownloadCompanyHistoryFile(db *gorm.DB, companyName string) (string, error) {
+    var history History
+    err := db.
+        Model(&History{}).
+        Joins("JOIN companies ON companies.id = histories.database_name").
+        Where("companies.company_name = ?", companyName).
+        Select("histories.file").
+        Order("histories.updated_at desc").
+        Limit(1).
+        First(&history).
+        Error
 
-	if err != nil {
-		return "", err
-	}
+    if err != nil {
+        return "", err
+    }
 
-	return history.File, nil
+    return history.File, nil
 }
+

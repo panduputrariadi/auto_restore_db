@@ -50,7 +50,7 @@ func InsertHistoryData(c *fiber.Ctx) error {
 	// Memeriksa apakah file memiliki ekstensi yang diperbolehkan (zip atau rar)
 	if !isValidFileExtension(fileHeader) {
 		return c.Status(fiber.StatusBadRequest).JSON(map[string]interface{}{
-			"message": "invalid file extension, only zip and rar are allowed",
+			"message": "invalid file extension, only zip are allowed",
 		})
 	}
 
